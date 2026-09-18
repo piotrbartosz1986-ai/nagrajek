@@ -38,13 +38,73 @@
     .result.show{display:block}
     a.download{display:block;text-align:center;text-decoration:none;background:var(--blue);color:white;border-radius:12px;padding:13px;font-weight:800;margin-top:10px}
     .tiny{font-size:11px;color:#64748b;margin-top:7px}
-    @media(max-width:520px){.grid,.buttons{grid-template-columns:1fr}.timer{font-size:26px}}
+    .sectionTitle{font-size:22px;margin:4px 0 4px}
+    .photoPicker{display:block;width:100%;padding:12px;border:1px dashed #475569;border-radius:12px;background:#0f172a;color:#e2e8f0}
+    .galleryMeta{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:10px;font-size:13px;color:var(--muted)}
+    .galleryStage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:14px;overflow:hidden;margin-top:10px;border:1px solid var(--line)}
+    .galleryStage img{width:100%;height:100%;object-fit:contain;display:none;background:#000}
+    .galleryStage img.show{display:block}
+    .galleryStage.cover img{object-fit:cover}
+    .galleryPlaceholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:#64748b;font-size:14px}
+    .galleryStage.hasImage .galleryPlaceholder{display:none}
+    .slideCounter{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,.62);padding:6px 9px;border-radius:999px;font-size:12px;font-weight:800}
+    .galleryStage:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;border:0;border-radius:0;background:#000}
+    .galleryStage:fullscreen img{width:100vw;height:100vh}
+    .galleryStage:fullscreen .slideCounter{right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));font-size:14px}
+    .galleryControls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px}
+    .galleryControls .primary{background:var(--blue);color:white}
+    .galleryControls .secondary{background:#263244;color:white}
+    .galleryControls .danger{background:#7f1d1d;color:white}
+    .fullBtn{background:#7c3aed;color:white;margin-top:10px}
+    .reactionHeader{margin-top:22px;border-top:1px solid var(--line);padding-top:18px}
+    @media(max-width:520px){.grid,.buttons,.galleryControls{grid-template-columns:1fr}.timer{font-size:26px}}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Reaction Recorder</h1>
-  <div class="sub">Test: przednia kamera + mikrofon + próba nagrywania po przejściu do gry.</div>
+  <h1 class="sectionTitle">Pokaz zdjęć</h1>
+  <div class="sub">Wybierz zdjęcia, ustaw tempo i uruchom pokaz na pełnym ekranie. Reaction Recorder może w tym czasie nagrywać Twoją reakcję.</div>
+
+  <div class="card">
+    <input id="photoInput" class="photoPicker" type="file" accept="image/*" multiple>
+    <div class="grid" style="margin-top:10px">
+      <div>
+        <div class="tiny" style="margin:0 0 5px">Zmiana zdjęcia</div>
+        <select id="slideInterval">
+          <option value="2">co 2 sekundy</option>
+          <option value="3">co 3 sekundy</option>
+          <option value="5" selected>co 5 sekund</option>
+          <option value="10">co 10 sekund</option>
+          <option value="15">co 15 sekund</option>
+          <option value="30">co 30 sekund</option>
+          <option value="60">co 60 sekund</option>
+        </select>
+      </div>
+      <label class="opt" style="margin-top:16px"><input id="coverToggle" type="checkbox"> Wypełnij ekran (może przyciąć)</label>
+    </div>
+
+    <div id="galleryStage" class="galleryStage">
+      <div class="galleryPlaceholder">Najpierw wybierz zdjęcia z telefonu.</div>
+      <img id="galleryImage" alt="Wybrane zdjęcie">
+      <div id="slideCounter" class="slideCounter">0 / 0</div>
+    </div>
+    <div class="galleryMeta">
+      <span id="galleryInfo">Nie wybrano zdjęć</span>
+      <span id="galleryStatus">Pokaz zatrzymany</span>
+    </div>
+    <div class="galleryControls">
+      <button id="prevPhotoBtn" class="secondary" disabled>← POPRZEDNIE</button>
+      <button id="nextPhotoBtn" class="secondary" disabled>NASTĘPNE →</button>
+      <button id="stopShowBtn" class="danger" disabled>■ STOP POKAZU</button>
+    </div>
+    <button id="startShowBtn" class="fullBtn" disabled>▶ POKAZ + PEŁNY EKRAN</button>
+    <div class="tiny">Na Androidzie Chrome pełny ekran musi zostać uruchomiony kliknięciem. Cofnięcie/gest systemowy wyjdzie z pełnego ekranu; nagrywanie na tej samej stronie powinno dalej trwać.</div>
+  </div>
+
+  <div class="reactionHeader">
+    <h1>Reaction Recorder</h1>
+    <div class="sub">Przednia kamera + mikrofon + test nagrywania reakcji.</div>
+  </div>
 
   <div class="card">
     <div class="statusRow">
@@ -60,6 +120,7 @@
       <label class="opt"><input id="previewToggle" type="checkbox"> Pokaż podgląd</label>
       <label class="opt"><input id="wakeToggle" type="checkbox" checked> Nie wygaszaj ekranu</label>
       <label class="opt"><input id="mirrorToggle" type="checkbox" checked> Lustrzany podgląd</label>
+      <label class="opt"><input id="landscapeToggle" type="checkbox"> Nagrywam w poziomie</label>
     </div>
     <div style="margin-top:10px">
       <select id="quality">
@@ -111,6 +172,102 @@
   let startedAt = 0;
   let blobUrl = null;
 
+  // Pokaz zdjęć
+  const photoInput = $('photoInput');
+  const galleryStage = $('galleryStage');
+  const galleryImage = $('galleryImage');
+  const slideCounter = $('slideCounter');
+  const galleryInfo = $('galleryInfo');
+  const galleryStatus = $('galleryStatus');
+  const startShowBtn = $('startShowBtn');
+  const stopShowBtn = $('stopShowBtn');
+  const prevPhotoBtn = $('prevPhotoBtn');
+  const nextPhotoBtn = $('nextPhotoBtn');
+  let photoUrls = [];
+  let photoIndex = 0;
+  let slideshowTimer = null;
+
+  function clearPhotos(){
+    photoUrls.forEach(x => URL.revokeObjectURL(x.url));
+    photoUrls = [];
+    photoIndex = 0;
+  }
+  function renderPhoto(){
+    const total = photoUrls.length;
+    if(!total){
+      galleryImage.classList.remove('show');
+      galleryImage.removeAttribute('src');
+      galleryStage.classList.remove('hasImage');
+      slideCounter.textContent = '0 / 0';
+      galleryInfo.textContent = 'Nie wybrano zdjęć';
+      return;
+    }
+    photoIndex = (photoIndex + total) % total;
+    galleryImage.src = photoUrls[photoIndex].url;
+    galleryImage.classList.add('show');
+    galleryStage.classList.add('hasImage');
+    slideCounter.textContent = `${photoIndex + 1} / ${total}`;
+    galleryInfo.textContent = `${total} zdjęć • ${photoUrls[photoIndex].name}`;
+  }
+  function nextPhoto(){ if(photoUrls.length){ photoIndex++; renderPhoto(); } }
+  function prevPhoto(){ if(photoUrls.length){ photoIndex--; renderPhoto(); } }
+  function stopSlideshow(){
+    if(slideshowTimer){ clearInterval(slideshowTimer); slideshowTimer = null; }
+    galleryStatus.textContent = 'Pokaz zatrzymany';
+    stopShowBtn.disabled = true;
+    startShowBtn.disabled = photoUrls.length === 0;
+  }
+  function startSlideshowTimer(){
+    if(slideshowTimer) clearInterval(slideshowTimer);
+    const seconds = Math.max(1, Number($('slideInterval').value) || 5);
+    slideshowTimer = setInterval(nextPhoto, seconds * 1000);
+    galleryStatus.textContent = `Pokaz aktywny • ${seconds} s`;
+    stopShowBtn.disabled = false;
+  }
+  async function startSlideshow(){
+    if(!photoUrls.length) return;
+    renderPhoto();
+    startSlideshowTimer();
+    startShowBtn.disabled = true;
+    try{
+      if(galleryStage.requestFullscreen && !document.fullscreenElement){
+        await galleryStage.requestFullscreen();
+        log('Pokaz zdjęć: włączono pełny ekran.');
+      }
+    }catch(e){
+      log('Pełny ekran niedostępny: ' + e.message);
+      galleryStatus.textContent = 'Pokaz aktywny • bez pełnego ekranu';
+    }
+  }
+
+  photoInput.addEventListener('change', () => {
+    clearPhotos();
+    const files = Array.from(photoInput.files || []).filter(f => f.type.startsWith('image/'));
+    photoUrls = files.map(file => ({name:file.name, url:URL.createObjectURL(file)}));
+    photoIndex = 0;
+    renderPhoto();
+    const has = photoUrls.length > 0;
+    startShowBtn.disabled = !has;
+    prevPhotoBtn.disabled = !has;
+    nextPhotoBtn.disabled = !has;
+    stopShowBtn.disabled = true;
+    galleryStatus.textContent = 'Pokaz zatrzymany';
+    if(has) log(`Wybrano ${photoUrls.length} zdjęć do pokazu.`);
+  });
+  $('coverToggle').addEventListener('change', e => galleryStage.classList.toggle('cover', e.target.checked));
+  $('slideInterval').addEventListener('change', () => { if(slideshowTimer) startSlideshowTimer(); });
+  prevPhotoBtn.addEventListener('click', prevPhoto);
+  nextPhotoBtn.addEventListener('click', nextPhoto);
+  stopShowBtn.addEventListener('click', stopSlideshow);
+  startShowBtn.addEventListener('click', startSlideshow);
+  document.addEventListener('fullscreenchange', () => {
+    if(!document.fullscreenElement && slideshowTimer){
+      galleryStatus.textContent = 'Pokaz aktywny • poza pełnym ekranem';
+      startShowBtn.disabled = false;
+      log('Pokaz zdjęć: wyjście z pełnego ekranu.');
+    }
+  });
+
   function ts(){ return new Date().toLocaleTimeString('pl-PL', {hour12:false}); }
   function log(msg){
     logEl.textContent += `[${ts()}] ${msg}\n`;
@@ -142,6 +299,11 @@
   $('mirrorToggle').addEventListener('change', e => {
     preview.style.transform = e.target.checked ? 'scaleX(-1)' : 'none';
   });
+  $('landscapeToggle').addEventListener('change', e => {
+    preview.style.aspectRatio = e.target.checked ? '16 / 9' : '9 / 16';
+    log('Tryb nagrania: ' + (e.target.checked ? 'POZIOM' : 'PION'));
+  });
+  preview.style.aspectRatio = '9 / 16';
 
   async function acquireWakeLock(){
     if (!$('wakeToggle').checked || !('wakeLock' in navigator)) return;
@@ -183,8 +345,13 @@
     chunks=[];
     try{
       const q = Number($('quality').value);
-      const dims = q===1080 ? {width:1920,height:1080} : q===720 ? {width:1280,height:720} : {width:854,height:480};
+      const landscape = $('landscapeToggle').checked;
+      const base = q===1080 ? {long:1920,short:1080} : q===720 ? {long:1280,short:720} : {long:854,short:480};
+      const dims = landscape
+        ? {width:base.long,height:base.short}
+        : {width:base.short,height:base.long};
       const wantAudio = $('audioToggle').checked;
+      log('Wybrana orientacja nagrania: '+(landscape?'POZIOM':'PION')+` (${dims.width}x${dims.height})`);
       const constraints = {
         video:{
           facingMode:{ideal:'user'},
