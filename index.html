@@ -127,16 +127,14 @@
       <label class="opt"><input id="previewToggle" type="checkbox"> Pokaż podgląd</label>
       <label class="opt"><input id="wakeToggle" type="checkbox" checked> Nie wygaszaj ekranu</label>
       <label class="opt"><input id="mirrorToggle" type="checkbox" checked> Lustrzany podgląd</label>
-      <label class="opt"><input id="landscapeToggle" type="checkbox"> Nagrywaj w poziomie (odznaczone = PION)</label>
     </div>
     <div style="margin-top:10px">
       <select id="quality">
-        <option value="480">480p – najmniejsze pliki</option>
-        <option value="720" selected>720p – polecane</option>
-        <option value="1080">1080p – wysoka jakość</option>
+        <option value="720">720p – mniejszy plik</option>
+        <option value="1080" selected>1080p – polecana</option>
       </select>
     </div>
-    <div class="tiny" style="margin-top:8px">Orientacja pliku jest wymuszana. Jeśli Chrome nie potrafi utworzyć wybranych proporcji, START pokaże błąd zamiast nagrać w złym układzie.</div>
+    <div class="tiny" style="margin-top:8px">Nagrywanie działa wyłącznie w trybie pionowym. Nie ma już przełącznika orientacji ani blokowania START przez kontrolę PION/POZIOM.</div>
 
     <button id="previewBtn" class="previewBtn">◉ WŁĄCZ PODGLĄD KAMERY</button>
 
@@ -327,54 +325,26 @@
   $('mirrorToggle').addEventListener('change', e => {
     preview.style.transform = e.target.checked ? 'scaleX(-1)' : 'none';
   });
-  $('landscapeToggle').addEventListener('change', async e => {
-    log('Tryb nagrania: ' + (e.target.checked ? 'POZIOM' : 'PION'));
-    // Nie zmieniamy sztucznie proporcji elementu <video>. Podgląd ma pokazać
-    // prawdziwe proporcje strumienia z kamery.
-    if(previewStream && !recorder){
-      previewInfo.textContent = 'Zmiana orientacji — odświeżam kamerę, aby podgląd odpowiadał nagraniu…';
-      await startPreview();
-    }
-  });
-
   function desiredVideoConstraints(){
     const q = Number($('quality').value);
-    const landscape = $('landscapeToggle').checked; // to, co wybrał użytkownik
-    const base = q===1080 ? {long:1920,short:1080} : q===720 ? {long:1280,short:720} : {long:854,short:480};
-
-    // Na testowanym Androidzie/Chrome orientacja strumienia z przedniej kamery
-    // jest raportowana odwrotnie względem końcowego nagrania. Dlatego żądamy
-    // przeciwnego układu surowego strumienia: checkbox POZIOM -> surowy PION,
-    // checkbox odznaczony (PION) -> surowy POZIOM.
-    const rawLandscape = !landscape;
-    const dims = rawLandscape ? {width:base.long,height:base.short} : {width:base.short,height:base.long};
-    const targetRatio = rawLandscape ? 16/9 : 9/16;
+    const dims = q===1080 ? {width:1080,height:1920} : {width:720,height:1280};
     return {
-      dims, landscape, rawLandscape, targetRatio,
+      dims,
       constraints:{
         facingMode:{ideal:'user'},
-        aspectRatio:{exact:targetRatio},
+        aspectRatio:{ideal:9/16},
         width:{ideal:dims.width},
         height:{ideal:dims.height},
-        resizeMode:{ideal:'crop-and-scale'},
         frameRate:{ideal:30,max:30}
       }
     };
   }
 
-  function verifyTrackOrientation(track, landscape, context='Kamera'){
+  function logTrackSize(track, context='Kamera'){
     const st = track?.getSettings ? track.getSettings() : {};
     const w = Number(st.width || 0), h = Number(st.height || 0);
-    const ratio = Number(st.aspectRatio || (w && h ? w/h : 0));
-    if(w && h){
-      log(`${context}: faktyczny strumień ${w}x${h} (${ratio ? ratio.toFixed(3) : '?'})`);
-      const actualLandscape = w > h;
-      if(actualLandscape !== landscape){
-        throw new Error(`Chrome zwrócił ${w}x${h}, czyli ${actualLandscape?'POZIOM':'PION'}, mimo wybranego trybu ${landscape?'POZIOM':'PION'}. Nagrywanie zatrzymane, żeby nie zapisać pliku w złej orientacji.`);
-      }
-    }else{
-      log(`${context}: przeglądarka nie podała wymiarów strumienia do weryfikacji.`);
-    }
+    if(w && h) log(`${context}: faktyczny strumień ${w}x${h}. Tryb aplikacji: PION.`);
+    else log(`${context}: przeglądarka nie podała wymiarów strumienia.`);
     return st;
   }
 
@@ -423,7 +393,7 @@
       log(`Podgląd: prośba o przednią kamerę ${cfg.dims.width}x${cfg.dims.height}.`);
       previewStream = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
       const track = previewStream.getVideoTracks()[0];
-      verifyTrackOrientation(track, cfg.rawLandscape, 'PODGLĄD');
+      logTrackSize(track, 'PODGLĄD');
       preview.srcObject = previewStream;
       $('previewToggle').checked = true;
       preview.classList.remove('hidden');
@@ -480,25 +450,25 @@
     try{
       const q = Number($('quality').value);
       const cfg = desiredVideoConstraints();
-      const landscape = cfg.landscape, dims = cfg.dims;
+      const dims = cfg.dims;
       const wantAudio = $('audioToggle').checked;
-      log('Wybrana orientacja nagrania: '+(landscape?'POZIOM':'PION')+`. Surowy strumień kamery: ${dims.width}x${dims.height}.`);
+      log(`Tryb nagrania: PION. Żądana jakość: ${dims.width}x${dims.height}.`);
 
       let videoTrack = previewStream?.getVideoTracks?.()[0];
       if(videoTrack && videoTrack.readyState === 'live'){
         try{
           await videoTrack.applyConstraints(cfg.constraints);
         }catch(e){
-          throw new Error('Nie udało się wymusić wybranej orientacji kamery przed START: '+e.message);
+          log('Chrome nie zastosował wszystkich preferowanych ustawień kamery: '+e.message);
         }
-        verifyTrackOrientation(videoTrack, cfg.rawLandscape, 'START');
+        logTrackSize(videoTrack, 'START');
         if(!zoomSlider.disabled) await applyZoom();
         log('START używa kamery uruchomionej wcześniej w podglądzie.');
       }else{
         log('Prośba o dostęp do przedniej kamery.');
         const videoOnly = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
         videoTrack = videoOnly.getVideoTracks()[0];
-        verifyTrackOrientation(videoTrack, cfg.rawLandscape, 'START');
+        logTrackSize(videoTrack, 'START');
         previewStream = videoOnly;
         preview.srcObject = previewStream;
         configureZoom(videoTrack);
@@ -524,7 +494,7 @@
 
       const mime = pickMime();
       log('Format MediaRecorder: '+(mime||'domyślny przeglądarki'));
-      recorder = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:q===1080?6000000:q===720?3500000:1800000, audioBitsPerSecond:128000} : undefined);
+      recorder = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:q===1080?6000000:3500000, audioBitsPerSecond:128000} : undefined);
 
       recorder.addEventListener('dataavailable', e=>{ if(e.data && e.data.size>0) chunks.push(e.data); });
       recorder.addEventListener('start', ()=>log('MediaRecorder START.'));
@@ -535,7 +505,6 @@
 
       // timeslice = 1000 ms, żeby dane były regularnie odkładane do chunków.
       recorder.start(1000);
-      $('landscapeToggle').disabled = true;
       $('quality').disabled = true;
       await acquireWakeLock();
       startTimer();
@@ -597,7 +566,6 @@
     zoomBox.hidden=true;
     setStatus('Gotowy');
     startBtn.disabled=false;
-    $('landscapeToggle').disabled = false;
     $('quality').disabled = false;
     timerEl.textContent='00:00:00';
   }
