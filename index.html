@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>Reaction Recorder – test tła</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b0f17;--card:#151b27;--line:#273244;--muted:#9ca3af;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;--blue:#3b82f6}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:#f8fafc;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;min-height:100vh}
+    .wrap{max-width:720px;margin:0 auto;padding:16px 14px 40px}
+    h1{font-size:22px;margin:4px 0 4px}
+    .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin:10px 0}
+    .statusRow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .pill{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;background:#202939;font-size:13px;font-weight:700}
+    .dot{width:9px;height:9px;border-radius:50%;background:#64748b}
+    .dot.rec{background:var(--bad);box-shadow:0 0 0 6px rgba(239,68,68,.12)}
+    .timer{font-variant-numeric:tabular-nums;font-size:30px;font-weight:800;letter-spacing:1px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    label.opt{display:flex;align-items:center;gap:10px;padding:11px;border:1px solid var(--line);border-radius:12px;background:#111827}
+    label.opt input{width:20px;height:20px}
+    select{width:100%;background:#0f172a;color:white;border:1px solid var(--line);border-radius:10px;padding:11px}
+    button{width:100%;border:0;border-radius:13px;padding:14px 16px;font-size:16px;font-weight:800;cursor:pointer}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    .start{background:var(--ok);color:#04110a}
+    .stop{background:var(--bad);color:white}
+    .save{background:var(--blue);color:white}
+    .ghost{background:#263244;color:white}
+    .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+    video{width:100%;max-height:48vh;object-fit:cover;border-radius:14px;background:#000;transform:scaleX(-1);margin-top:10px}
+    video.hidden{display:none}
+    .info{font-size:13px;color:var(--muted);line-height:1.45}
+    .good{color:#86efac}.warn{color:#fcd34d}.bad{color:#fca5a5}
+    pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:210px;overflow:auto;background:#0b1220;border-radius:10px;padding:10px;font-size:12px;color:#cbd5e1}
+    .result{display:none}
+    .result.show{display:block}
+    a.download{display:block;text-align:center;text-decoration:none;background:var(--blue);color:white;border-radius:12px;padding:13px;font-weight:800;margin-top:10px}
+    .tiny{font-size:11px;color:#64748b;margin-top:7px}
+    @media(max-width:520px){.grid,.buttons{grid-template-columns:1fr}.timer{font-size:26px}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Reaction Recorder</h1>
+  <div class="sub">Test: przednia kamera + mikrofon + próba nagrywania po przejściu do gry.</div>
+
+  <div class="card">
+    <div class="statusRow">
+      <div class="pill"><span id="dot" class="dot"></span><span id="status">Gotowy</span></div>
+      <div id="timer" class="timer">00:00:00</div>
+    </div>
+    <div id="secureInfo" class="info" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <label class="opt"><input id="audioToggle" type="checkbox" checked> Mikrofon</label>
+      <label class="opt"><input id="previewToggle" type="checkbox"> Pokaż podgląd</label>
+      <label class="opt"><input id="wakeToggle" type="checkbox" checked> Nie wygaszaj ekranu</label>
+      <label class="opt"><input id="mirrorToggle" type="checkbox" checked> Lustrzany podgląd</label>
+    </div>
+    <div style="margin-top:10px">
+      <select id="quality">
+        <option value="480">480p – najmniejsze pliki</option>
+        <option value="720" selected>720p – polecane</option>
+        <option value="1080">1080p – wysoka jakość</option>
+      </select>
+    </div>
+    <video id="preview" class="hidden" autoplay muted playsinline></video>
+  </div>
+
+  <div class="card">
+    <button id="startBtn" class="start">● START NAGRYWANIA</button>
+    <div class="buttons">
+      <button id="stopBtn" class="stop" disabled>■ STOP</button>
+      <button id="testBtn" class="ghost" disabled>Sprawdź stan nagrania</button>
+    </div>
+    <div class="tiny">Po START poczekaj 2–3 sekundy, przejdź do gry, pograj chwilę i wróć. Potem STOP.</div>
+  </div>
+
+  <div id="result" class="card result">
+    <b>Nagranie gotowe</b>
+    <div id="resultInfo" class="info" style="margin-top:6px"></div>
+    <video id="playback" controls playsinline style="transform:none"></video>
+    <a id="downloadLink" class="download" download>⬇ ZAPISZ NAGRANIE</a>
+  </div>
+
+  <div class="card">
+    <b>Diagnostyka testu w tle</b>
+    <div class="info" style="margin:6px 0 10px">Tu zobaczysz, czy Android/Chrome wyciszył albo zakończył kamerę lub mikrofon po wyjściu z przeglądarki.</div>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const startBtn = $('startBtn'), stopBtn = $('stopBtn'), testBtn = $('testBtn');
+  const preview = $('preview'), playback = $('playback');
+  const statusEl = $('status'), dot = $('dot'), timerEl = $('timer');
+  const logEl = $('log'), result = $('result'), resultInfo = $('resultInfo');
+  const downloadLink = $('downloadLink');
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let wakeLock = null;
+  let timerInt = null;
+  let startedAt = 0;
+  let blobUrl = null;
+
+  function ts(){ return new Date().toLocaleTimeString('pl-PL', {hour12:false}); }
+  function log(msg){
+    logEl.textContent += `[${ts()}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setStatus(txt, rec=false){
+    statusEl.textContent = txt;
+    dot.classList.toggle('rec', rec);
+  }
+  function fmt(ms){
+    const s = Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+    return [h,m,sec].map(v=>String(v).padStart(2,'0')).join(':');
+  }
+  function startTimer(){
+    startedAt = Date.now();
+    timerEl.textContent='00:00:00';
+    timerInt=setInterval(()=>timerEl.textContent=fmt(Date.now()-startedAt),500);
+  }
+  function stopTimer(){ clearInterval(timerInt); timerInt=null; }
+
+  const secureOK = window.isSecureContext || location.hostname === 'localhost';
+  $('secureInfo').innerHTML = secureOK
+    ? '<span class="good">✓ Bezpieczny kontekst – kamera i mikrofon powinny być dostępne.</span>'
+    : '<span class="bad">⚠ Ta strona nie działa przez HTTPS. Kamera/mikrofon mogą być zablokowane.</span>';
+
+  $('previewToggle').addEventListener('change', e => {
+    preview.classList.toggle('hidden', !e.target.checked);
+  });
+  $('mirrorToggle').addEventListener('change', e => {
+    preview.style.transform = e.target.checked ? 'scaleX(-1)' : 'none';
+  });
+
+  async function acquireWakeLock(){
+    if (!$('wakeToggle').checked || !('wakeLock' in navigator)) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      log('Wake Lock aktywny.');
+      wakeLock.addEventListener('release', ()=>log('Wake Lock został zwolniony przez system/przeglądarkę.'));
+    } catch(e){ log('Wake Lock niedostępny: '+e.message); }
+  }
+  async function releaseWakeLock(){
+    try{ if(wakeLock) await wakeLock.release(); }catch(_){}
+    wakeLock=null;
+  }
+
+  function pickMime(){
+    const types = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4'
+    ];
+    return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+  }
+
+  function trackDiagnostics(track, label){
+    log(`${label}: state=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}`);
+    track.addEventListener('mute', ()=>log(`${label}: MUTE – system/przeglądarka wstrzymał dane.`));
+    track.addEventListener('unmute', ()=>log(`${label}: UNMUTE – dane wróciły.`));
+    track.addEventListener('ended', ()=>log(`${label}: ENDED – ścieżka została zakończona.`));
+  }
+
+  async function startRecording(){
+    if (!navigator.mediaDevices?.getUserMedia){
+      alert('Ta przeglądarka nie obsługuje getUserMedia.'); return;
+    }
+    startBtn.disabled=true;
+    result.classList.remove('show');
+    if(blobUrl){ URL.revokeObjectURL(blobUrl); blobUrl=null; }
+    chunks=[];
+    try{
+      const q = Number($('quality').value);
+      const dims = q===1080 ? {width:1920,height:1080} : q===720 ? {width:1280,height:720} : {width:854,height:480};
+      const wantAudio = $('audioToggle').checked;
+      const constraints = {
+        video:{
+          facingMode:{ideal:'user'},
+          width:{ideal:dims.width},
+          height:{ideal:dims.height},
+          frameRate:{ideal:30,max:30}
+        },
+        audio: wantAudio ? {
+          echoCancellation:false,
+          noiseSuppression:false,
+          autoGainControl:true
+        } : false
+      };
+      log('Prośba o dostęp do przedniej kamery'+(wantAudio?' i mikrofonu.':'.'));
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      preview.srcObject = stream;
+
+      stream.getVideoTracks().forEach(t=>trackDiagnostics(t,'KAMERA'));
+      stream.getAudioTracks().forEach(t=>trackDiagnostics(t,'MIKROFON'));
+
+      const mime = pickMime();
+      log('Format MediaRecorder: '+(mime||'domyślny przeglądarki'));
+      recorder = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:q===1080?6000000:q===720?3500000:1800000, audioBitsPerSecond:128000} : undefined);
+
+      recorder.addEventListener('dataavailable', e=>{ if(e.data && e.data.size>0) chunks.push(e.data); });
+      recorder.addEventListener('start', ()=>log('MediaRecorder START.'));
+      recorder.addEventListener('pause', ()=>log('MediaRecorder PAUSE.'));
+      recorder.addEventListener('resume', ()=>log('MediaRecorder RESUME.'));
+      recorder.addEventListener('error', e=>log('MediaRecorder ERROR: '+(e.error?.message||e.message||e)));
+      recorder.addEventListener('stop', finishRecording);
+
+      // timeslice = 1000 ms, żeby dane były regularnie odkładane do chunków.
+      recorder.start(1000);
+      await acquireWakeLock();
+      startTimer();
+      setStatus('NAGRYWANIE', true);
+      stopBtn.disabled=false;
+      testBtn.disabled=false;
+      log('Nagrywanie rozpoczęte. Możesz teraz przejść do gry.');
+    }catch(e){
+      log('BŁĄD START: '+e.name+' – '+e.message);
+      setStatus('Błąd uruchomienia');
+      startBtn.disabled=false;
+      alert('Nie udało się uruchomić kamery/mikrofonu:\n'+e.message);
+    }
+  }
+
+  function snapshotState(){
+    if(!recorder){ log('Brak aktywnego MediaRecorder.'); return; }
+    const v=stream?.getVideoTracks()[0], a=stream?.getAudioTracks()[0];
+    log(`STAN: recorder=${recorder.state}, strona=${document.visibilityState}`);
+    if(v) log(`KAMERA: readyState=${v.readyState}, muted=${v.muted}, enabled=${v.enabled}`);
+    if(a) log(`MIKROFON: readyState=${a.readyState}, muted=${a.muted}, enabled=${a.enabled}`);
+  }
+
+  async function stopRecording(){
+    stopBtn.disabled=true;
+    testBtn.disabled=true;
+    setStatus('Kończenie…');
+    stopTimer();
+    await releaseWakeLock();
+    try{
+      if(recorder && recorder.state!=='inactive') recorder.stop();
+      else finishRecording();
+    }catch(e){ log('BŁĄD STOP: '+e.message); finishRecording(); }
+  }
+
+  function finishRecording(){
+    const duration = startedAt ? Date.now()-startedAt : 0;
+    const type = recorder?.mimeType || chunks[0]?.type || 'video/webm';
+    const blob = new Blob(chunks,{type});
+    if(blob.size>0){
+      blobUrl=URL.createObjectURL(blob);
+      playback.src=blobUrl;
+      const ext=type.includes('mp4')?'mp4':'webm';
+      downloadLink.href=blobUrl;
+      downloadLink.download=`reaction_${new Date().toISOString().replace(/[:.]/g,'-')}.${ext}`;
+      resultInfo.textContent=`Czas sesji: ${fmt(duration)} • rozmiar: ${(blob.size/1024/1024).toFixed(1)} MB • format: ${type}`;
+      result.classList.add('show');
+      log(`Plik gotowy: ${(blob.size/1024/1024).toFixed(1)} MB.`);
+    }else{
+      log('UWAGA: powstał pusty plik. Przeglądarka mogła zatrzymać nagrywanie w tle.');
+      alert('Nagranie jest puste. Najprawdopodobniej przeglądarka zatrzymała kamerę/nagrywanie.');
+    }
+    stream?.getTracks().forEach(t=>t.stop());
+    preview.srcObject=null;
+    recorder=null; stream=null; chunks=[];
+    setStatus('Gotowy');
+    startBtn.disabled=false;
+    timerEl.textContent='00:00:00';
+  }
+
+  document.addEventListener('visibilitychange', async ()=>{
+    log(`Widoczność strony: ${document.visibilityState}`);
+    if(document.visibilityState==='visible'){
+      snapshotState();
+      if(recorder?.state==='recording') await acquireWakeLock();
+    }
+  });
+  window.addEventListener('pagehide', ()=>log('EVENT pagehide – strona opuszczana/chowana.'));
+  window.addEventListener('pageshow', ()=>log('EVENT pageshow – strona wróciła.'));
+  window.addEventListener('freeze', ()=>log('EVENT freeze – przeglądarka zamraża stronę.'));
+  window.addEventListener('resume', ()=>log('EVENT resume – strona odmrożona.'));
+
+  startBtn.addEventListener('click', startRecording);
+  stopBtn.addEventListener('click', stopRecording);
+  testBtn.addEventListener('click', snapshotState);
+
+  log('Strona uruchomiona.');
+  log('Urządzenie: '+navigator.userAgent);
+  if(!window.MediaRecorder) log('UWAGA: MediaRecorder nie jest dostępny.');
+})();
+</script>
+</body>
+</html>
