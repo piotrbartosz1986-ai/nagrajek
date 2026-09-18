@@ -154,12 +154,21 @@
       <label class="opt"><input id="mirrorToggle" type="checkbox" checked> Lustrzany podgląd</label>
     </div>
     <div style="margin-top:10px">
+      <div class="tiny" style="margin:0 0 5px">Jakość nagrania</div>
       <select id="quality">
-        <option value="720">720p – mniejszy plik</option>
-        <option value="1080" selected>1080p – polecana</option>
+        <option value="1080">1080p – wysoka jakość</option>
+        <option value="max" selected>MAX / 4K – polecana</option>
       </select>
     </div>
-    <div class="tiny" style="margin-top:8px">Nagrywanie działa wyłącznie w trybie pionowym. Nie ma już przełącznika orientacji ani blokowania START przez kontrolę PION/POZIOM.</div>
+    <div style="margin-top:10px">
+      <div class="tiny" style="margin:0 0 5px">Kadr przedniej kamery</div>
+      <select id="framing">
+        <option value="wide" selected>👥 2 osoby – SZEROKI KADR</option>
+        <option value="normal">👤 1 osoba – BLIŻSZY KADR</option>
+      </select>
+    </div>
+    <div id="cameraModeInfo" class="tiny" style="margin-top:8px">Tryb szeroki prosi Chrome o możliwie pełny kadr 4:3 i minimalny zoom. To jest odpowiednik idei ikony „2 osoby” z aparatu Samsunga, ale aplikacja Aparat może mieć dostęp do szerszego przetwarzania obrazu niż strona WWW.</div>
+    <div class="tiny" style="margin-top:8px">Nagrywanie działa wyłącznie w trybie pionowym. Faktyczna rozdzielczość zwrócona przez Chrome jest pokazywana pod podglądem.</div>
 
     <button id="previewBtn" class="previewBtn">◉ WŁĄCZ PODGLĄD KAMERY</button>
 
@@ -213,6 +222,8 @@
   const zoomValue = $('zoomValue');
   const zoomInfo = $('zoomInfo');
   const previewInfo = $('previewInfo');
+  const framing = $('framing');
+  const cameraModeInfo = $('cameraModeInfo');
 
   let stream = null;
   let previewStream = null;
@@ -523,24 +534,33 @@
     preview.style.transform = e.target.checked ? 'scaleX(-1)' : 'none';
   });
   function desiredVideoConstraints(){
-    const q = Number($('quality').value);
+    const q = $('quality').value;
+    const wide = framing.value === 'wide';
 
-    // Docelowy plik ma być WYŁĄCZNIE pionowy.
-    // Na testowanym Androidzie/Chrome orientacja wymiarów kamery jest raportowana
-    // odwrotnie względem wyniku MediaRecorder. Dlatego dla pionowego rezultatu
-    // prosimy kamerę o wymiary wejściowe w układzie poziomym.
-    const dims = q===1080 ? {width:1080,height:1920} : {width:720,height:1280};
-    const cameraDims = q===1080 ? {width:1920,height:1080} : {width:1280,height:720};
+    // Na tym S24+/Chrome żądany strumień jest raportowany w układzie poziomym,
+    // a zapisany plik ma orientację pionową. Dlatego prosimy kamerę o wymiary
+    // poziome i traktujemy zamianę osi jako docelowy pion.
+    let cameraDims;
+    if(q === 'max'){
+      // 4K / maksimum: 16:9 dla bliższego kadru, 4:3 dla szerokiego kadru.
+      cameraDims = wide ? {width:2880,height:2160} : {width:3840,height:2160};
+    }else{
+      cameraDims = wide ? {width:1440,height:1080} : {width:1920,height:1080};
+    }
+    const dims = {width:cameraDims.height,height:cameraDims.width};
+    const ratio = cameraDims.width / cameraDims.height;
 
     return {
       dims,
       cameraDims,
+      wide,
       constraints:{
         facingMode:{ideal:'user'},
-        aspectRatio:{ideal:16/9},
+        aspectRatio:{ideal:ratio},
         width:{ideal:cameraDims.width},
         height:{ideal:cameraDims.height},
-        frameRate:{ideal:30,max:30}
+        frameRate:{ideal:30,max:30},
+        resizeMode:{ideal:'none'}
       }
     };
   }
@@ -553,25 +573,39 @@
     return st;
   }
 
-  function configureZoom(track){
+  async function configureZoom(track){
     zoomBox.hidden = false;
     const caps = track?.getCapabilities ? track.getCapabilities() : {};
     const settings = track?.getSettings ? track.getSettings() : {};
     if(caps.zoom && Number.isFinite(caps.zoom.min) && Number.isFinite(caps.zoom.max)){
       const min = Number(caps.zoom.min), max = Number(caps.zoom.max);
       const step = Number(caps.zoom.step) || 0.1;
-      const current = Number.isFinite(settings.zoom) ? Number(settings.zoom) : min;
+      let target;
+      if(framing.value === 'wide'){
+        target = min;
+      }else{
+        // Samsung w trybie „1 osoba” stosuje węższy kadr. W przeglądarce
+        // przybliżamy ten efekt lekkim cyfrowym cropem, jeśli HAL pozwala.
+        target = Math.min(max, Math.max(min, min * 1.22));
+      }
+      const current = Number.isFinite(settings.zoom) ? Number(settings.zoom) : target;
       zoomSlider.min = String(min);
       zoomSlider.max = String(max);
       zoomSlider.step = String(step);
-      zoomSlider.value = String(Math.max(min, Math.min(max, current)));
+      zoomSlider.value = String(Math.max(min, Math.min(max, target || current)));
       zoomSlider.disabled = max <= min;
-      zoomValue.textContent = Number(zoomSlider.value).toFixed(1) + '×';
-      zoomInfo.textContent = max > min ? `Zakres tej kamery: ${min.toFixed(1)}× – ${max.toFixed(1)}×` : 'Ta kamera nie udostępnia zmiennego zoomu.';
+      zoomValue.textContent = Number(zoomSlider.value).toFixed(2) + '×';
+      zoomInfo.textContent = max > min
+        ? `Zakres tej kamery w Chrome: ${min.toFixed(2)}× – ${max.toFixed(2)}×. ${framing.value==='wide'?'Szeroki kadr używa minimum.':'Tryb 1 osoby używa lekkiego przybliżenia.'}`
+        : 'Chrome nie udostępnia zmiennego zoomu tej przedniej kamery.';
+      if(max > min){
+        try{ await track.applyConstraints({advanced:[{zoom:Number(zoomSlider.value)}]}); }
+        catch(e){ log('Nie udało się ustawić kadru/zoomu: '+e.message); }
+      }
     }else{
       zoomSlider.min='1'; zoomSlider.max='1'; zoomSlider.value='1'; zoomSlider.disabled=true;
-      zoomValue.textContent='1.0×';
-      zoomInfo.textContent='Ta przednia kamera/przeglądarka nie udostępnia sterowania zoomem.';
+      zoomValue.textContent='1.00×';
+      zoomInfo.textContent='Chrome nie udostępnia sterowania zoomem dla tej przedniej kamery. Szeroki kadr nadal próbuje użyć proporcji 4:3.';
     }
   }
 
@@ -579,11 +613,11 @@
     const track = (previewStream || stream)?.getVideoTracks?.()[0];
     if(!track || zoomSlider.disabled) return;
     const z = Number(zoomSlider.value);
-    zoomValue.textContent = z.toFixed(1) + '×';
+    zoomValue.textContent = z.toFixed(2) + '×';
     try{
       await track.applyConstraints({advanced:[{zoom:z}]});
     }catch(e){
-      log('Zoom: nie udało się zastosować '+z.toFixed(1)+'× – '+e.message);
+      log('Zoom: nie udało się zastosować '+z.toFixed(2)+'× – '+e.message);
     }
   }
 
@@ -610,14 +644,14 @@
     try{
       if(previewStream){ previewStream.getTracks().forEach(t=>t.stop()); previewStream=null; }
       const cfg = desiredVideoConstraints();
-      log(`Podgląd: tryb PION ${cfg.dims.width}x${cfg.dims.height}; żądanie kamery ${cfg.cameraDims.width}x${cfg.cameraDims.height} (odwrócone dla tego Androida/Chrome).`);
+      log(`Podgląd: PION • ${cfg.wide?'SZEROKI (2 osoby)':'BLIŻSZY (1 osoba)'} • cel ${cfg.dims.width}x${cfg.dims.height}; żądanie kamery ${cfg.cameraDims.width}x${cfg.cameraDims.height}.`);
       previewStream = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
       const track = previewStream.getVideoTracks()[0];
       logTrackSize(track, 'PODGLĄD');
       preview.srcObject = previewStream;
       $('previewToggle').checked = true;
       preview.classList.remove('hidden');
-      configureZoom(track);
+      await configureZoom(track);
       previewInfo.textContent='Podgląd aktywny. Ustaw kadr i zoom, potem kliknij START NAGRYWANIA.';
       previewBtn.textContent='↻ ODŚWIEŻ PODGLĄD / USTAWIENIA';
       log('Podgląd kamery aktywny.');
@@ -643,11 +677,15 @@
   }
 
   function pickMime(){
+    // MP4/H.264 jest preferowany, bo na Androidzie zwykle ma poprawną długość
+    // i przewijanie. WebM zostaje jako awaryjny fallback.
     const types = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4'
+      'video/webm'
     ];
     return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
   }
@@ -668,11 +706,11 @@
     if(blobUrl){ URL.revokeObjectURL(blobUrl); blobUrl=null; }
     chunks=[];
     try{
-      const q = Number($('quality').value);
+      const q = $('quality').value;
       const cfg = desiredVideoConstraints();
       const dims = cfg.dims;
       const wantAudio = $('audioToggle').checked;
-      log(`Tryb nagrania: PION ${dims.width}x${dims.height}. Kamera dostaje ${cfg.cameraDims.width}x${cfg.cameraDims.height}, ponieważ na tym Androidzie/Chrome daje to pionowy wynik.`);
+      log(`Tryb nagrania: PION • ${cfg.wide?'SZEROKI (2 osoby)':'BLIŻSZY (1 osoba)'} • cel ${dims.width}x${dims.height}. Kamera dostaje ${cfg.cameraDims.width}x${cfg.cameraDims.height}.`);
 
       let videoTrack = previewStream?.getVideoTracks?.()[0];
       if(videoTrack && videoTrack.readyState === 'live'){
@@ -691,7 +729,7 @@
         logTrackSize(videoTrack, 'START');
         previewStream = videoOnly;
         preview.srcObject = previewStream;
-        configureZoom(videoTrack);
+        await configureZoom(videoTrack);
       }
 
       let audioTracks = [];
@@ -713,8 +751,9 @@
       stream.getAudioTracks().forEach(t=>trackDiagnostics(t,'MIKROFON'));
 
       const mime = pickMime();
-      log('Format MediaRecorder: '+(mime||'domyślny przeglądarki'));
-      recorder = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:q===1080?6000000:3500000, audioBitsPerSecond:128000} : undefined);
+      const videoBps = q==='max' ? 20000000 : 8000000;
+      log('Format MediaRecorder: '+(mime||'domyślny przeglądarki')+` • bitrate wideo ${(videoBps/1000000).toFixed(0)} Mb/s`);
+      recorder = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:videoBps, audioBitsPerSecond:160000} : undefined);
 
       recorder.addEventListener('dataavailable', e=>{ if(e.data && e.data.size>0) chunks.push(e.data); });
       recorder.addEventListener('start', ()=>log('MediaRecorder START.'));
@@ -726,6 +765,7 @@
       // timeslice = 1000 ms, żeby dane były regularnie odkładane do chunków.
       recorder.start(1000);
       $('quality').disabled = true;
+      framing.disabled = true;
       await acquireWakeLock();
       startTimer();
       setStatus('NAGRYWANIE', true);
@@ -760,17 +800,47 @@
     }catch(e){ log('BŁĄD STOP: '+e.message); finishRecording(); }
   }
 
-  function finishRecording(){
+  function repairPlaybackSeek(video, expectedDurationMs){
+    const expectedSec = Math.max(0, expectedDurationMs / 1000);
+    const repair = () => {
+      const d = video.duration;
+      if(Number.isFinite(d) && d > 0){
+        log(`Odtwarzanie: długość metadanych ${d.toFixed(2)} s.`);
+        return;
+      }
+      // Chromium/WebM czasem zwraca Infinity/NaN. Skok na bardzo duży czas
+      // zmusza parser do odnalezienia końca pliku i odblokowuje suwak przewijania.
+      try{
+        const onTime = () => {
+          video.removeEventListener('timeupdate', onTime);
+          const fixed = video.duration;
+          try{ video.currentTime = 0; }catch(_){}
+          if(Number.isFinite(fixed)) log(`Odtwarzanie: naprawiono seek/duration → ${fixed.toFixed(2)} s.`);
+          else log(`Odtwarzanie: Chrome nadal nie podał długości; czas sesji to ${expectedSec.toFixed(1)} s.`);
+        };
+        video.addEventListener('timeupdate', onTime);
+        video.currentTime = 1e10;
+      }catch(e){
+        log('Nie udało się automatycznie odblokować przewijania: '+e.message);
+      }
+    };
+    if(video.readyState >= 1) repair();
+    else video.addEventListener('loadedmetadata', repair, {once:true});
+  }
+
+  async function finishRecording(){
     const duration = startedAt ? Date.now()-startedAt : 0;
     const type = recorder?.mimeType || chunks[0]?.type || 'video/webm';
-    const blob = new Blob(chunks,{type});
+    let blob = new Blob(chunks,{type});
     if(blob.size>0){
       blobUrl=URL.createObjectURL(blob);
       playback.src=blobUrl;
+      playback.load();
+      repairPlaybackSeek(playback, duration);
       const ext=type.includes('mp4')?'mp4':'webm';
       downloadLink.href=blobUrl;
       downloadLink.download=`reaction_${new Date().toISOString().replace(/[:.]/g,'-')}.${ext}`;
-      resultInfo.textContent=`Czas sesji: ${fmt(duration)} • rozmiar: ${(blob.size/1024/1024).toFixed(1)} MB • format: ${type}`;
+      resultInfo.textContent=`Czas: ${fmt(duration)} • rozmiar: ${(blob.size/1024/1024).toFixed(1)} MB • format: ${type}${type.includes('mp4')?' • przewijanie: MP4':' • WebM: próbuję naprawić suwak przewijania'}`;
       result.classList.add('show');
       log(`Plik gotowy: ${(blob.size/1024/1024).toFixed(1)} MB.`);
     }else{
@@ -787,6 +857,7 @@
     setStatus('Gotowy');
     startBtn.disabled=false;
     $('quality').disabled = false;
+    framing.disabled = false;
     timerEl.textContent='00:00:00';
   }
 
@@ -804,7 +875,13 @@
 
   previewBtn.addEventListener('click', startPreview);
   zoomSlider.addEventListener('input', applyZoom);
-  $('quality').addEventListener('change', ()=>{ if(previewStream) previewInfo.textContent='Zmieniono jakość — kliknij „ODŚWIEŻ PODGLĄD / USTAWIENIA”, aby zobaczyć nowy kadr.'; });
+  $('quality').addEventListener('change', ()=>{ if(previewStream) previewInfo.textContent='Zmieniono jakość — kliknij „ODŚWIEŻ PODGLĄD / USTAWIENIA”, aby kamera otworzyła nowy strumień.'; });
+  framing.addEventListener('change', ()=>{
+    cameraModeInfo.textContent = framing.value==='wide'
+      ? 'Szeroki kadr: proporcje 4:3 + minimalny zoom dostępny w Chrome. Powinien pokazać więcej otoczenia.'
+      : 'Bliższy kadr: proporcje 16:9 + lekkie przybliżenie, podobnie do ikony „1 osoba”.';
+    if(previewStream) previewInfo.textContent='Zmieniono kadr — kliknij „ODŚWIEŻ PODGLĄD / USTAWIENIA”, aby zobaczyć rzeczywisty efekt.';
+  });
   startBtn.addEventListener('click', startRecording);
   stopBtn.addEventListener('click', stopRecording);
   testBtn.addEventListener('click', snapshotState);
