@@ -339,17 +339,20 @@
 
   function desiredVideoConstraints(){
     const q = Number($('quality').value);
-    const landscape = $('landscapeToggle').checked;
+    const landscape = $('landscapeToggle').checked; // to, co wybrał użytkownik
     const base = q===1080 ? {long:1920,short:1080} : q===720 ? {long:1280,short:720} : {long:854,short:480};
-    const dims = landscape ? {width:base.long,height:base.short} : {width:base.short,height:base.long};
-    const targetRatio = landscape ? 16/9 : 9/16;
+
+    // Na testowanym Androidzie/Chrome orientacja strumienia z przedniej kamery
+    // jest raportowana odwrotnie względem końcowego nagrania. Dlatego żądamy
+    // przeciwnego układu surowego strumienia: checkbox POZIOM -> surowy PION,
+    // checkbox odznaczony (PION) -> surowy POZIOM.
+    const rawLandscape = !landscape;
+    const dims = rawLandscape ? {width:base.long,height:base.short} : {width:base.short,height:base.long};
+    const targetRatio = rawLandscape ? 16/9 : 9/16;
     return {
-      dims, landscape, targetRatio,
+      dims, landscape, rawLandscape, targetRatio,
       constraints:{
         facingMode:{ideal:'user'},
-        // WAŻNE: wcześniej szerokość/wysokość były tylko "ideal", więc Chrome
-        // mógł je zignorować i oddać 16:9 nawet przy wybranym PIONIE.
-        // Exact aspectRatio wymusza orientację albo zwraca błąd zamiast nagrywać źle.
         aspectRatio:{exact:targetRatio},
         width:{ideal:dims.width},
         height:{ideal:dims.height},
@@ -420,7 +423,7 @@
       log(`Podgląd: prośba o przednią kamerę ${cfg.dims.width}x${cfg.dims.height}.`);
       previewStream = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
       const track = previewStream.getVideoTracks()[0];
-      verifyTrackOrientation(track, cfg.landscape, 'PODGLĄD');
+      verifyTrackOrientation(track, cfg.rawLandscape, 'PODGLĄD');
       preview.srcObject = previewStream;
       $('previewToggle').checked = true;
       preview.classList.remove('hidden');
@@ -479,7 +482,7 @@
       const cfg = desiredVideoConstraints();
       const landscape = cfg.landscape, dims = cfg.dims;
       const wantAudio = $('audioToggle').checked;
-      log('Wybrana orientacja nagrania: '+(landscape?'POZIOM':'PION')+` (${dims.width}x${dims.height})`);
+      log('Wybrana orientacja nagrania: '+(landscape?'POZIOM':'PION')+`. Surowy strumień kamery: ${dims.width}x${dims.height}.`);
 
       let videoTrack = previewStream?.getVideoTracks?.()[0];
       if(videoTrack && videoTrack.readyState === 'live'){
@@ -488,14 +491,14 @@
         }catch(e){
           throw new Error('Nie udało się wymusić wybranej orientacji kamery przed START: '+e.message);
         }
-        verifyTrackOrientation(videoTrack, landscape, 'START');
+        verifyTrackOrientation(videoTrack, cfg.rawLandscape, 'START');
         if(!zoomSlider.disabled) await applyZoom();
         log('START używa kamery uruchomionej wcześniej w podglądzie.');
       }else{
         log('Prośba o dostęp do przedniej kamery.');
         const videoOnly = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
         videoTrack = videoOnly.getVideoTracks()[0];
-        verifyTrackOrientation(videoTrack, landscape, 'START');
+        verifyTrackOrientation(videoTrack, cfg.rawLandscape, 'START');
         previewStream = videoOnly;
         preview.srcObject = previewStream;
         configureZoom(videoTrack);
