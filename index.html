@@ -30,6 +30,8 @@
     .ghost{background:#263244;color:white}
     .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
     video{width:100%;max-height:48vh;object-fit:cover;border-radius:14px;background:#000;transform:scaleX(-1);margin-top:10px}
+    #preview{width:100%;height:auto;max-height:none;object-fit:contain;display:block;background:#000}
+    #preview.hidden{display:none}
     video.hidden{display:none}
     .info{font-size:13px;color:var(--muted);line-height:1.45}
     .good{color:#86efac}.warn{color:#fcd34d}.bad{color:#fca5a5}
@@ -57,6 +59,11 @@
     .galleryControls .danger{background:#7f1d1d;color:white}
     .fullBtn{background:#7c3aed;color:white;margin-top:10px}
     .reactionHeader{margin-top:22px;border-top:1px solid var(--line);padding-top:18px}
+    .zoomBox{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#111827}
+    .zoomHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+    .zoomValue{font-weight:800;font-variant-numeric:tabular-nums}
+    input[type=range]{width:100%;accent-color:var(--blue)}
+    .previewBtn{background:#0ea5e9;color:#001018;margin-top:10px}
     @media(max-width:520px){.grid,.buttons,.galleryControls{grid-template-columns:1fr}.timer{font-size:26px}}
   </style>
 </head>
@@ -120,7 +127,7 @@
       <label class="opt"><input id="previewToggle" type="checkbox"> Pokaż podgląd</label>
       <label class="opt"><input id="wakeToggle" type="checkbox" checked> Nie wygaszaj ekranu</label>
       <label class="opt"><input id="mirrorToggle" type="checkbox" checked> Lustrzany podgląd</label>
-      <label class="opt"><input id="landscapeToggle" type="checkbox"> Nagrywam w poziomie</label>
+      <label class="opt"><input id="landscapeToggle" type="checkbox"> Nagrywaj w poziomie (odznaczone = PION)</label>
     </div>
     <div style="margin-top:10px">
       <select id="quality">
@@ -129,7 +136,21 @@
         <option value="1080">1080p – wysoka jakość</option>
       </select>
     </div>
+    <div class="tiny" style="margin-top:8px">Orientacja pliku jest wymuszana. Jeśli Chrome nie potrafi utworzyć wybranych proporcji, START pokaże błąd zamiast nagrać w złym układzie.</div>
+
+    <button id="previewBtn" class="previewBtn">◉ WŁĄCZ PODGLĄD KAMERY</button>
+
+    <div id="zoomBox" class="zoomBox" hidden>
+      <div class="zoomHead">
+        <b>Zoom kamery</b>
+        <span id="zoomValue" class="zoomValue">1.0×</span>
+      </div>
+      <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" disabled>
+      <div id="zoomInfo" class="tiny">Uruchom podgląd, aby sprawdzić zakres zoomu przedniej kamery.</div>
+    </div>
+
     <video id="preview" class="hidden" autoplay muted playsinline></video>
+    <div id="previewInfo" class="tiny">Podgląd pokazuje cały kadr dopasowany do szerokości. Wysokość ramki dopasowuje się automatycznie do proporcji kamery. Mikrofon zostanie uruchomiony dopiero po START.</div>
   </div>
 
   <div class="card">
@@ -163,8 +184,15 @@
   const statusEl = $('status'), dot = $('dot'), timerEl = $('timer');
   const logEl = $('log'), result = $('result'), resultInfo = $('resultInfo');
   const downloadLink = $('downloadLink');
+  const previewBtn = $('previewBtn');
+  const zoomBox = $('zoomBox');
+  const zoomSlider = $('zoomSlider');
+  const zoomValue = $('zoomValue');
+  const zoomInfo = $('zoomInfo');
+  const previewInfo = $('previewInfo');
 
   let stream = null;
+  let previewStream = null;
   let recorder = null;
   let chunks = [];
   let wakeLock = null;
@@ -294,16 +322,119 @@
     : '<span class="bad">⚠ Ta strona nie działa przez HTTPS. Kamera/mikrofon mogą być zablokowane.</span>';
 
   $('previewToggle').addEventListener('change', e => {
-    preview.classList.toggle('hidden', !e.target.checked);
+    preview.classList.toggle('hidden', !e.target.checked || !preview.srcObject);
   });
   $('mirrorToggle').addEventListener('change', e => {
     preview.style.transform = e.target.checked ? 'scaleX(-1)' : 'none';
   });
-  $('landscapeToggle').addEventListener('change', e => {
-    preview.style.aspectRatio = e.target.checked ? '16 / 9' : '9 / 16';
+  $('landscapeToggle').addEventListener('change', async e => {
     log('Tryb nagrania: ' + (e.target.checked ? 'POZIOM' : 'PION'));
+    // Nie zmieniamy sztucznie proporcji elementu <video>. Podgląd ma pokazać
+    // prawdziwe proporcje strumienia z kamery.
+    if(previewStream && !recorder){
+      previewInfo.textContent = 'Zmiana orientacji — odświeżam kamerę, aby podgląd odpowiadał nagraniu…';
+      await startPreview();
+    }
   });
-  preview.style.aspectRatio = '9 / 16';
+
+  function desiredVideoConstraints(){
+    const q = Number($('quality').value);
+    const landscape = $('landscapeToggle').checked;
+    const base = q===1080 ? {long:1920,short:1080} : q===720 ? {long:1280,short:720} : {long:854,short:480};
+    const dims = landscape ? {width:base.long,height:base.short} : {width:base.short,height:base.long};
+    const targetRatio = landscape ? 16/9 : 9/16;
+    return {
+      dims, landscape, targetRatio,
+      constraints:{
+        facingMode:{ideal:'user'},
+        // WAŻNE: wcześniej szerokość/wysokość były tylko "ideal", więc Chrome
+        // mógł je zignorować i oddać 16:9 nawet przy wybranym PIONIE.
+        // Exact aspectRatio wymusza orientację albo zwraca błąd zamiast nagrywać źle.
+        aspectRatio:{exact:targetRatio},
+        width:{ideal:dims.width},
+        height:{ideal:dims.height},
+        resizeMode:{ideal:'crop-and-scale'},
+        frameRate:{ideal:30,max:30}
+      }
+    };
+  }
+
+  function verifyTrackOrientation(track, landscape, context='Kamera'){
+    const st = track?.getSettings ? track.getSettings() : {};
+    const w = Number(st.width || 0), h = Number(st.height || 0);
+    const ratio = Number(st.aspectRatio || (w && h ? w/h : 0));
+    if(w && h){
+      log(`${context}: faktyczny strumień ${w}x${h} (${ratio ? ratio.toFixed(3) : '?'})`);
+      const actualLandscape = w > h;
+      if(actualLandscape !== landscape){
+        throw new Error(`Chrome zwrócił ${w}x${h}, czyli ${actualLandscape?'POZIOM':'PION'}, mimo wybranego trybu ${landscape?'POZIOM':'PION'}. Nagrywanie zatrzymane, żeby nie zapisać pliku w złej orientacji.`);
+      }
+    }else{
+      log(`${context}: przeglądarka nie podała wymiarów strumienia do weryfikacji.`);
+    }
+    return st;
+  }
+
+  function configureZoom(track){
+    zoomBox.hidden = false;
+    const caps = track?.getCapabilities ? track.getCapabilities() : {};
+    const settings = track?.getSettings ? track.getSettings() : {};
+    if(caps.zoom && Number.isFinite(caps.zoom.min) && Number.isFinite(caps.zoom.max)){
+      const min = Number(caps.zoom.min), max = Number(caps.zoom.max);
+      const step = Number(caps.zoom.step) || 0.1;
+      const current = Number.isFinite(settings.zoom) ? Number(settings.zoom) : min;
+      zoomSlider.min = String(min);
+      zoomSlider.max = String(max);
+      zoomSlider.step = String(step);
+      zoomSlider.value = String(Math.max(min, Math.min(max, current)));
+      zoomSlider.disabled = max <= min;
+      zoomValue.textContent = Number(zoomSlider.value).toFixed(1) + '×';
+      zoomInfo.textContent = max > min ? `Zakres tej kamery: ${min.toFixed(1)}× – ${max.toFixed(1)}×` : 'Ta kamera nie udostępnia zmiennego zoomu.';
+    }else{
+      zoomSlider.min='1'; zoomSlider.max='1'; zoomSlider.value='1'; zoomSlider.disabled=true;
+      zoomValue.textContent='1.0×';
+      zoomInfo.textContent='Ta przednia kamera/przeglądarka nie udostępnia sterowania zoomem.';
+    }
+  }
+
+  async function applyZoom(){
+    const track = (previewStream || stream)?.getVideoTracks?.()[0];
+    if(!track || zoomSlider.disabled) return;
+    const z = Number(zoomSlider.value);
+    zoomValue.textContent = z.toFixed(1) + '×';
+    try{
+      await track.applyConstraints({advanced:[{zoom:z}]});
+    }catch(e){
+      log('Zoom: nie udało się zastosować '+z.toFixed(1)+'× – '+e.message);
+    }
+  }
+
+  async function startPreview(){
+    if (!navigator.mediaDevices?.getUserMedia){
+      alert('Ta przeglądarka nie obsługuje kamery.'); return;
+    }
+    previewBtn.disabled = true;
+    try{
+      if(previewStream){ previewStream.getTracks().forEach(t=>t.stop()); previewStream=null; }
+      const cfg = desiredVideoConstraints();
+      log(`Podgląd: prośba o przednią kamerę ${cfg.dims.width}x${cfg.dims.height}.`);
+      previewStream = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
+      const track = previewStream.getVideoTracks()[0];
+      verifyTrackOrientation(track, cfg.landscape, 'PODGLĄD');
+      preview.srcObject = previewStream;
+      $('previewToggle').checked = true;
+      preview.classList.remove('hidden');
+      configureZoom(track);
+      previewInfo.textContent='Podgląd aktywny. Ustaw kadr i zoom, potem kliknij START NAGRYWANIA.';
+      previewBtn.textContent='↻ ODŚWIEŻ PODGLĄD / USTAWIENIA';
+      log('Podgląd kamery aktywny.');
+    }catch(e){
+      log('BŁĄD PODGLĄDU: '+e.name+' – '+e.message);
+      alert('Nie udało się uruchomić podglądu kamery:\n'+e.message);
+    }finally{
+      previewBtn.disabled = false;
+    }
+  }
 
   async function acquireWakeLock(){
     if (!$('wakeToggle').checked || !('wakeLock' in navigator)) return;
@@ -345,29 +476,45 @@
     chunks=[];
     try{
       const q = Number($('quality').value);
-      const landscape = $('landscapeToggle').checked;
-      const base = q===1080 ? {long:1920,short:1080} : q===720 ? {long:1280,short:720} : {long:854,short:480};
-      const dims = landscape
-        ? {width:base.long,height:base.short}
-        : {width:base.short,height:base.long};
+      const cfg = desiredVideoConstraints();
+      const landscape = cfg.landscape, dims = cfg.dims;
       const wantAudio = $('audioToggle').checked;
       log('Wybrana orientacja nagrania: '+(landscape?'POZIOM':'PION')+` (${dims.width}x${dims.height})`);
-      const constraints = {
-        video:{
-          facingMode:{ideal:'user'},
-          width:{ideal:dims.width},
-          height:{ideal:dims.height},
-          frameRate:{ideal:30,max:30}
-        },
-        audio: wantAudio ? {
+
+      let videoTrack = previewStream?.getVideoTracks?.()[0];
+      if(videoTrack && videoTrack.readyState === 'live'){
+        try{
+          await videoTrack.applyConstraints(cfg.constraints);
+        }catch(e){
+          throw new Error('Nie udało się wymusić wybranej orientacji kamery przed START: '+e.message);
+        }
+        verifyTrackOrientation(videoTrack, landscape, 'START');
+        if(!zoomSlider.disabled) await applyZoom();
+        log('START używa kamery uruchomionej wcześniej w podglądzie.');
+      }else{
+        log('Prośba o dostęp do przedniej kamery.');
+        const videoOnly = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
+        videoTrack = videoOnly.getVideoTracks()[0];
+        verifyTrackOrientation(videoTrack, landscape, 'START');
+        previewStream = videoOnly;
+        preview.srcObject = previewStream;
+        configureZoom(videoTrack);
+      }
+
+      let audioTracks = [];
+      if(wantAudio){
+        log('Prośba o dostęp do mikrofonu.');
+        const audioStream = await navigator.mediaDevices.getUserMedia({video:false,audio:{
           echoCancellation:false,
           noiseSuppression:false,
           autoGainControl:true
-        } : false
-      };
-      log('Prośba o dostęp do przedniej kamery'+(wantAudio?' i mikrofonu.':'.'));
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
+        }});
+        audioTracks = audioStream.getAudioTracks();
+      }
+
+      stream = new MediaStream([videoTrack, ...audioTracks]);
       preview.srcObject = stream;
+      if($('previewToggle').checked) preview.classList.remove('hidden');
 
       stream.getVideoTracks().forEach(t=>trackDiagnostics(t,'KAMERA'));
       stream.getAudioTracks().forEach(t=>trackDiagnostics(t,'MIKROFON'));
@@ -385,6 +532,8 @@
 
       // timeslice = 1000 ms, żeby dane były regularnie odkładane do chunków.
       recorder.start(1000);
+      $('landscapeToggle').disabled = true;
+      $('quality').disabled = true;
       await acquireWakeLock();
       startTimer();
       setStatus('NAGRYWANIE', true);
@@ -437,10 +586,16 @@
       alert('Nagranie jest puste. Najprawdopodobniej przeglądarka zatrzymała kamerę/nagrywanie.');
     }
     stream?.getTracks().forEach(t=>t.stop());
+    if(previewStream && previewStream !== stream) previewStream.getTracks().forEach(t=>t.stop());
     preview.srcObject=null;
-    recorder=null; stream=null; chunks=[];
+    recorder=null; stream=null; previewStream=null; chunks=[];
+    previewBtn.textContent='◉ WŁĄCZ PODGLĄD KAMERY';
+    previewInfo.textContent='Podgląd pokazuje cały kadr dopasowany do szerokości. Wysokość ramki dopasowuje się automatycznie do proporcji kamery. Mikrofon zostanie uruchomiony dopiero po START.';
+    zoomBox.hidden=true;
     setStatus('Gotowy');
     startBtn.disabled=false;
+    $('landscapeToggle').disabled = false;
+    $('quality').disabled = false;
     timerEl.textContent='00:00:00';
   }
 
@@ -456,6 +611,9 @@
   window.addEventListener('freeze', ()=>log('EVENT freeze – przeglądarka zamraża stronę.'));
   window.addEventListener('resume', ()=>log('EVENT resume – strona odmrożona.'));
 
+  previewBtn.addEventListener('click', startPreview);
+  zoomSlider.addEventListener('input', applyZoom);
+  $('quality').addEventListener('change', ()=>{ if(previewStream) previewInfo.textContent='Zmieniono jakość — kliknij „ODŚWIEŻ PODGLĄD / USTAWIENIA”, aby zobaczyć nowy kadr.'; });
   startBtn.addEventListener('click', startRecording);
   stopBtn.addEventListener('click', stopRecording);
   testBtn.addEventListener('click', snapshotState);
