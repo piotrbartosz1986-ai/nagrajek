@@ -30,7 +30,7 @@
     .ghost{background:#263244;color:white}
     .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
     video{width:100%;max-height:48vh;object-fit:cover;border-radius:14px;background:#000;transform:scaleX(-1);margin-top:10px}
-    #preview{width:100%;height:auto;max-height:none;object-fit:contain;display:block;background:#000}
+    #preview{width:auto;max-width:100%;height:auto;max-height:none;object-fit:contain;display:block;background:transparent;margin:10px auto 0}
     #preview.hidden{display:none}
     video.hidden{display:none}
     .info{font-size:13px;color:var(--muted);line-height:1.45}
@@ -42,6 +42,13 @@
     .tiny{font-size:11px;color:#64748b;margin-top:7px}
     .sectionTitle{font-size:22px;margin:4px 0 4px}
     .photoPicker{display:block;width:100%;padding:12px;border:1px dashed #475569;border-radius:12px;background:#0f172a;color:#e2e8f0}
+    .savedLists{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#111827}
+    .savedListsTitle{font-weight:800;margin-bottom:8px}
+    .savedListsGrid{display:grid;grid-template-columns:1fr auto;gap:8px}
+    .savedListsActions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+    .savedLists input[type=text]{width:100%;background:#0f172a;color:white;border:1px solid var(--line);border-radius:10px;padding:11px}
+    .savedLists button{padding:11px 13px;font-size:14px}
+    .storageInfo{font-size:11px;color:#64748b;margin-top:8px;line-height:1.35}
     .galleryMeta{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:10px;font-size:13px;color:var(--muted)}
     .galleryStage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:14px;overflow:hidden;margin-top:10px;border:1px solid var(--line)}
     .galleryStage img{width:100%;height:100%;object-fit:contain;display:none;background:#000}
@@ -64,7 +71,7 @@
     .zoomValue{font-weight:800;font-variant-numeric:tabular-nums}
     input[type=range]{width:100%;accent-color:var(--blue)}
     .previewBtn{background:#0ea5e9;color:#001018;margin-top:10px}
-    @media(max-width:520px){.grid,.buttons,.galleryControls{grid-template-columns:1fr}.timer{font-size:26px}}
+    @media(max-width:520px){.grid,.buttons,.galleryControls,.savedListsGrid,.savedListsActions{grid-template-columns:1fr}.timer{font-size:26px}}
   </style>
 </head>
 <body>
@@ -74,6 +81,24 @@
 
   <div class="card">
     <input id="photoInput" class="photoPicker" type="file" accept="image/*" multiple>
+
+    <div class="savedLists">
+      <div class="savedListsTitle">Zapisane listy slajdów</div>
+      <div class="savedListsGrid">
+        <input id="slideListName" type="text" maxlength="60" placeholder="Nazwa listy, np. Góry 1">
+        <button id="saveSlideListBtn" class="save" disabled>ZAPISZ LISTĘ</button>
+      </div>
+      <div style="margin-top:8px">
+        <select id="savedSlideLists">
+          <option value="">Brak zapisanych list</option>
+        </select>
+      </div>
+      <div class="savedListsActions">
+        <button id="loadSlideListBtn" class="ghost" disabled>WCZYTAJ LISTĘ</button>
+        <button id="deleteSlideListBtn" class="danger" disabled>USUŃ LISTĘ</button>
+      </div>
+      <div id="slideListStatus" class="storageInfo">Listy są przechowywane lokalnie w pamięci tej przeglądarki na tym urządzeniu (IndexedDB). Pozostaną po zamknięciu strony, dopóki dane witryny nie zostaną wyczyszczone.</div>
+    </div>
     <div class="grid" style="margin-top:10px">
       <div>
         <div class="tiny" style="margin:0 0 5px">Zmiana zdjęcia</div>
@@ -148,7 +173,7 @@
     </div>
 
     <video id="preview" class="hidden" autoplay muted playsinline></video>
-    <div id="previewInfo" class="tiny">Podgląd pokazuje cały kadr dopasowany do szerokości. Wysokość ramki dopasowuje się automatycznie do proporcji kamery. Mikrofon zostanie uruchomiony dopiero po START.</div>
+    <div id="previewInfo" class="tiny">Podgląd nie ma sztywnej ramki: jego szerokość i wysokość dopasowują się do faktycznych proporcji obrazu z kamery. Mikrofon zostanie uruchomiony dopiero po START.</div>
   </div>
 
   <div class="card">
@@ -213,6 +238,170 @@
   let photoIndex = 0;
   let slideshowTimer = null;
 
+  // Zapisane zestawy slajdów w pamięci urządzenia (IndexedDB)
+  const slideListName = $('slideListName');
+  const saveSlideListBtn = $('saveSlideListBtn');
+  const savedSlideLists = $('savedSlideLists');
+  const loadSlideListBtn = $('loadSlideListBtn');
+  const deleteSlideListBtn = $('deleteSlideListBtn');
+  const slideListStatus = $('slideListStatus');
+  const SLIDE_DB_NAME = 'reaction-recorder-local';
+  const SLIDE_DB_VERSION = 1;
+  const SLIDE_STORE = 'slideLists';
+  let slideDbPromise = null;
+
+  function openSlideDb(){
+    if(slideDbPromise) return slideDbPromise;
+    slideDbPromise = new Promise((resolve,reject)=>{
+      const req = indexedDB.open(SLIDE_DB_NAME, SLIDE_DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if(!db.objectStoreNames.contains(SLIDE_STORE)){
+          db.createObjectStore(SLIDE_STORE, {keyPath:'name'});
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Nie udało się otworzyć pamięci lokalnej.'));
+    });
+    return slideDbPromise;
+  }
+
+  async function dbRequest(mode, action){
+    const db = await openSlideDb();
+    return new Promise((resolve,reject)=>{
+      const tx = db.transaction(SLIDE_STORE, mode);
+      const store = tx.objectStore(SLIDE_STORE);
+      let req;
+      try{ req = action(store); }catch(e){ reject(e); return; }
+      if(req){
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error('Błąd pamięci lokalnej.'));
+      }else{
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Błąd pamięci lokalnej.'));
+      }
+    });
+  }
+
+  async function getAllSlideLists(){ return dbRequest('readonly', s => s.getAll()); }
+  async function putSlideList(record){ return dbRequest('readwrite', s => s.put(record)); }
+  async function getSlideList(name){ return dbRequest('readonly', s => s.get(name)); }
+  async function removeSlideList(name){ return dbRequest('readwrite', s => s.delete(name)); }
+
+  function formatBytes(bytes){
+    if(!Number.isFinite(bytes) || bytes<=0) return '0 MB';
+    return (bytes/1024/1024).toFixed(bytes>=100*1024*1024?0:1)+' MB';
+  }
+
+  async function updateStorageEstimate(){
+    if(!navigator.storage?.estimate) return;
+    try{
+      const e = await navigator.storage.estimate();
+      const used = e.usage || 0, quota = e.quota || 0;
+      const base = 'Listy są przechowywane lokalnie w pamięci tej przeglądarki na tym urządzeniu (IndexedDB).';
+      slideListStatus.textContent = quota ? `${base} Użycie witryny: ${formatBytes(used)} z ok. ${formatBytes(quota)}.` : base;
+    }catch(_){}
+  }
+
+  async function refreshSavedLists(selectName=''){
+    try{
+      const lists = (await getAllSlideLists()).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
+      savedSlideLists.innerHTML = '';
+      if(!lists.length){
+        const o=document.createElement('option'); o.value=''; o.textContent='Brak zapisanych list'; savedSlideLists.appendChild(o);
+      }else{
+        const o=document.createElement('option'); o.value=''; o.textContent='Wybierz zapisaną listę…'; savedSlideLists.appendChild(o);
+        for(const item of lists){
+          const opt=document.createElement('option');
+          opt.value=item.name;
+          opt.textContent=`${item.name} (${item.files?.length||0})`;
+          savedSlideLists.appendChild(opt);
+        }
+      }
+      if(selectName && lists.some(x=>x.name===selectName)) savedSlideLists.value=selectName;
+      const hasSel=!!savedSlideLists.value;
+      loadSlideListBtn.disabled=!hasSel; deleteSlideListBtn.disabled=!hasSel;
+      await updateStorageEstimate();
+    }catch(e){
+      slideListStatus.textContent='Nie udało się odczytać zapisanych list: '+e.message;
+    }
+  }
+
+  function updateSaveListButton(){
+    saveSlideListBtn.disabled = photoUrls.length===0;
+  }
+
+  async function saveCurrentSlideList(){
+    if(!photoUrls.length) return;
+    let name=(slideListName.value||'').trim();
+    if(!name){
+      name=`Lista ${new Date().toLocaleString('pl-PL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
+      slideListName.value=name;
+    }
+    saveSlideListBtn.disabled=true;
+    slideListStatus.textContent='Zapisywanie listy w pamięci urządzenia…';
+    try{
+      if(navigator.storage?.persist){ try{ await navigator.storage.persist(); }catch(_){} }
+      const files = photoUrls.map((x,i)=>({
+        name:x.name || `slajd-${i+1}`,
+        type:x.blob?.type || 'image/*',
+        lastModified:x.lastModified || Date.now(),
+        blob:x.blob
+      })).filter(x=>x.blob);
+      await putSlideList({
+        name, files,
+        slideInterval:$('slideInterval').value,
+        cover:$('coverToggle').checked,
+        savedAt:Date.now()
+      });
+      await refreshSavedLists(name);
+      slideListStatus.textContent=`✓ Zapisano „${name}” • ${files.length} slajdów. Lista zostaje na tym urządzeniu.`;
+      log(`Zapisano lokalną listę slajdów „${name}” (${files.length}).`);
+    }catch(e){
+      slideListStatus.textContent='Błąd zapisu listy: '+e.message;
+      log('BŁĄD zapisu listy slajdów: '+e.message);
+    }finally{ updateSaveListButton(); }
+  }
+
+  async function loadSavedSlideList(){
+    const name=savedSlideLists.value; if(!name) return;
+    loadSlideListBtn.disabled=true;
+    try{
+      const rec=await getSlideList(name);
+      if(!rec) throw new Error('Nie znaleziono tej listy.');
+      clearPhotos();
+      photoUrls=(rec.files||[]).map(f=>({
+        name:f.name, blob:f.blob, lastModified:f.lastModified, url:URL.createObjectURL(f.blob)
+      }));
+      photoIndex=0;
+      if(rec.slideInterval) $('slideInterval').value=String(rec.slideInterval);
+      $('coverToggle').checked=!!rec.cover;
+      galleryStage.classList.toggle('cover', !!rec.cover);
+      renderPhoto();
+      const has=photoUrls.length>0;
+      startShowBtn.disabled=!has; prevPhotoBtn.disabled=!has; nextPhotoBtn.disabled=!has; stopShowBtn.disabled=true;
+      galleryStatus.textContent='Pokaz zatrzymany';
+      slideListName.value=rec.name;
+      updateSaveListButton();
+      slideListStatus.textContent=`✓ Wczytano „${rec.name}” • ${photoUrls.length} slajdów.`;
+      log(`Wczytano lokalną listę slajdów „${rec.name}” (${photoUrls.length}).`);
+    }catch(e){
+      slideListStatus.textContent='Błąd wczytywania listy: '+e.message;
+    }finally{
+      loadSlideListBtn.disabled=!savedSlideLists.value;
+    }
+  }
+
+  async function deleteSavedSlideList(){
+    const name=savedSlideLists.value; if(!name) return;
+    try{
+      await removeSlideList(name);
+      await refreshSavedLists();
+      slideListStatus.textContent=`Usunięto zapisaną listę „${name}”.`;
+      log(`Usunięto lokalną listę slajdów „${name}”.`);
+    }catch(e){ slideListStatus.textContent='Błąd usuwania listy: '+e.message; }
+  }
+
   function clearPhotos(){
     photoUrls.forEach(x => URL.revokeObjectURL(x.url));
     photoUrls = [];
@@ -269,7 +458,7 @@
   photoInput.addEventListener('change', () => {
     clearPhotos();
     const files = Array.from(photoInput.files || []).filter(f => f.type.startsWith('image/'));
-    photoUrls = files.map(file => ({name:file.name, url:URL.createObjectURL(file)}));
+    photoUrls = files.map(file => ({name:file.name, blob:file, lastModified:file.lastModified, url:URL.createObjectURL(file)}));
     photoIndex = 0;
     renderPhoto();
     const has = photoUrls.length > 0;
@@ -278,8 +467,16 @@
     nextPhotoBtn.disabled = !has;
     stopShowBtn.disabled = true;
     galleryStatus.textContent = 'Pokaz zatrzymany';
+    updateSaveListButton();
     if(has) log(`Wybrano ${photoUrls.length} zdjęć do pokazu.`);
   });
+  savedSlideLists.addEventListener('change', ()=>{
+    const has=!!savedSlideLists.value;
+    loadSlideListBtn.disabled=!has; deleteSlideListBtn.disabled=!has;
+  });
+  saveSlideListBtn.addEventListener('click', saveCurrentSlideList);
+  loadSlideListBtn.addEventListener('click', loadSavedSlideList);
+  deleteSlideListBtn.addEventListener('click', deleteSavedSlideList);
   $('coverToggle').addEventListener('change', e => galleryStage.classList.toggle('cover', e.target.checked));
   $('slideInterval').addEventListener('change', () => { if(slideshowTimer) startSlideshowTimer(); });
   prevPhotoBtn.addEventListener('click', prevPhoto);
@@ -327,14 +524,22 @@
   });
   function desiredVideoConstraints(){
     const q = Number($('quality').value);
+
+    // Docelowy plik ma być WYŁĄCZNIE pionowy.
+    // Na testowanym Androidzie/Chrome orientacja wymiarów kamery jest raportowana
+    // odwrotnie względem wyniku MediaRecorder. Dlatego dla pionowego rezultatu
+    // prosimy kamerę o wymiary wejściowe w układzie poziomym.
     const dims = q===1080 ? {width:1080,height:1920} : {width:720,height:1280};
+    const cameraDims = q===1080 ? {width:1920,height:1080} : {width:1280,height:720};
+
     return {
       dims,
+      cameraDims,
       constraints:{
         facingMode:{ideal:'user'},
-        aspectRatio:{ideal:9/16},
-        width:{ideal:dims.width},
-        height:{ideal:dims.height},
+        aspectRatio:{ideal:16/9},
+        width:{ideal:cameraDims.width},
+        height:{ideal:cameraDims.height},
         frameRate:{ideal:30,max:30}
       }
     };
@@ -382,6 +587,21 @@
     }
   }
 
+  function fitPreviewToCamera(){
+    const vw=preview.videoWidth, vh=preview.videoHeight;
+    if(!vw || !vh) return;
+    // Brak sztywnej ramki: element zachowuje dokładne proporcje strumienia,
+    // a jego rozmiar ogranicza jedynie szerokość karty/ekranu.
+    preview.style.aspectRatio = `${vw} / ${vh}`;
+    preview.style.width = 'auto';
+    preview.style.height = 'auto';
+    preview.style.maxWidth = '100%';
+    previewInfo.textContent=`Podgląd: ${vw}×${vh}. Ramka dopasowana dokładnie do proporcji obrazu z kamery.`;
+  }
+
+  preview.addEventListener('loadedmetadata', fitPreviewToCamera);
+  preview.addEventListener('resize', fitPreviewToCamera);
+
   async function startPreview(){
     if (!navigator.mediaDevices?.getUserMedia){
       alert('Ta przeglądarka nie obsługuje kamery.'); return;
@@ -390,7 +610,7 @@
     try{
       if(previewStream){ previewStream.getTracks().forEach(t=>t.stop()); previewStream=null; }
       const cfg = desiredVideoConstraints();
-      log(`Podgląd: prośba o przednią kamerę ${cfg.dims.width}x${cfg.dims.height}.`);
+      log(`Podgląd: tryb PION ${cfg.dims.width}x${cfg.dims.height}; żądanie kamery ${cfg.cameraDims.width}x${cfg.cameraDims.height} (odwrócone dla tego Androida/Chrome).`);
       previewStream = await navigator.mediaDevices.getUserMedia({video:cfg.constraints,audio:false});
       const track = previewStream.getVideoTracks()[0];
       logTrackSize(track, 'PODGLĄD');
@@ -452,7 +672,7 @@
       const cfg = desiredVideoConstraints();
       const dims = cfg.dims;
       const wantAudio = $('audioToggle').checked;
-      log(`Tryb nagrania: PION. Żądana jakość: ${dims.width}x${dims.height}.`);
+      log(`Tryb nagrania: PION ${dims.width}x${dims.height}. Kamera dostaje ${cfg.cameraDims.width}x${cfg.cameraDims.height}, ponieważ na tym Androidzie/Chrome daje to pionowy wynik.`);
 
       let videoTrack = previewStream?.getVideoTracks?.()[0];
       if(videoTrack && videoTrack.readyState === 'live'){
@@ -562,7 +782,7 @@
     preview.srcObject=null;
     recorder=null; stream=null; previewStream=null; chunks=[];
     previewBtn.textContent='◉ WŁĄCZ PODGLĄD KAMERY';
-    previewInfo.textContent='Podgląd pokazuje cały kadr dopasowany do szerokości. Wysokość ramki dopasowuje się automatycznie do proporcji kamery. Mikrofon zostanie uruchomiony dopiero po START.';
+    previewInfo.textContent='Podgląd nie ma sztywnej ramki: jego szerokość i wysokość dopasowują się do faktycznych proporcji obrazu z kamery. Mikrofon zostanie uruchomiony dopiero po START.';
     zoomBox.hidden=true;
     setStatus('Gotowy');
     startBtn.disabled=false;
@@ -589,6 +809,8 @@
   stopBtn.addEventListener('click', stopRecording);
   testBtn.addEventListener('click', snapshotState);
 
+  refreshSavedLists();
+  updateSaveListButton();
   log('Strona uruchomiona.');
   log('Urządzenie: '+navigator.userAgent);
   if(!window.MediaRecorder) log('UWAGA: MediaRecorder nie jest dostępny.');
